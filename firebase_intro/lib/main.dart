@@ -1,121 +1,288 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
 
-void main() {
-  runApp(const MyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: 'Autumn Product Manager',
+    home: ProductPage(),
+  ));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class ProductPage extends StatefulWidget {
+  const ProductPage({super.key});
+  @override
+  State<ProductPage> createState() => _ProductPageState();
+}
 
-  // This widget is the root of your application.
+class _ProductPageState extends State<ProductPage> {
+  final _products = FirebaseFirestore.instance.collection('products');
+  late final _productStream = _products.snapshots();
+
+  Future<void> _createOrUpdate(
+    [QueryDocumentSnapshot<Map<String, dynamic>>? document]
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (context) => ProductEditor(
+        products: _products,
+        document: document,
+      ),
+    );
+  }
+
+  Future<void> _deleteProduct(String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context, 
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadiusGeometry.circular(10),
+            side: BorderSide(width: 2.5)
+          ),
+          content: SingleChildScrollView(
+            child: Text(
+            'Are you sure you wish to delete this item?',
+            style: TextStyle(
+              fontSize: 20,
+              )
+            )
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(true);
+              },
+              style: ButtonStyle(
+                backgroundColor: WidgetStatePropertyAll(Colors.redAccent)
+              ),
+              child: Text(
+                'Delete',
+                style: TextStyle(color: Colors.black)
+              )
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(false);
+              },
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: Colors.black)
+              )
+            )
+          ] 
+        );
+      }
+    );
+    if (confirmed == true) {
+      try {
+        await _products.doc(id).delete();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Item Successfully Deleted.')),
+        );
+      }
+      on FirebaseException catch (error) {
+        debugPrint('Product deletion failed (${error.code}): ${error.message}');
+        if (!mounted) return;
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Autumn Product Manager')),
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: _productStream,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(child: Text(
+              'Products could not load. Check connection and permissions.',
+            ));
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final documents = snapshot.data!.docs;
+          if (documents.isEmpty) {
+            return const Center(child: Text('No products yet. Add one to begin.'));
+          }
+          return ListView.builder(
+            itemCount: documents.length,
+            itemBuilder: (context, index) {
+              final document = documents[index];
+              final data = document.data();
+              final name = data['name'];
+              final price = data['price'];
+              if (name is! String || name.trim().isEmpty || price is! num ||
+                  !price.isFinite || price < 0) {
+                return ListTile(title: Text(
+                  'Invalid product ${document.id}: check name/price types.',
+                ));
+              }
+              return Card(
+                child: ListTile(
+                  title: Text(name),
+                  subtitle: Text('${price.toStringAsFixed(2)}\nID: ${document.id}'),
+                  isThreeLine: true,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Edit product',
+                        icon: const Icon(Icons.edit),
+                        onPressed: () => _createOrUpdate(document),
+                      ),
+                      IconButton(
+                        tooltip: 'Delete product',
+                        icon: const Icon(Icons.delete),
+                        onPressed: () => _deleteProduct(document.id),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      floatingActionButton: FloatingActionButton(
+        tooltip: 'Create product',
+        onPressed: () => _createOrUpdate(),
+        child: const Icon(Icons.add),
+      ),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+class ProductEditor extends StatefulWidget {
+  const ProductEditor({
+    super.key,
+    required this.products,
+    this.document,
+  });
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+  final CollectionReference<Map<String, dynamic>> products;
+  final QueryDocumentSnapshot<Map<String, dynamic>>? document;
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ProductEditor> createState() => _ProductEditorState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ProductEditorState extends State<ProductEditor> {
+  final _formKey = GlobalKey<FormState>();
+  late final _name = TextEditingController(
+    text: widget.document?.data()['name'] as String? ?? '',
+  );
+  late final _price = TextEditingController(
+    text: widget.document?.data()['price']?.toString() ?? '',
+  );
+  var _saving = false;
+  String? _saveError;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  @override
+  void dispose() {
+    _name.dispose();
+    _price.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() { _saving = true; _saveError = null; });
+    final data = <String, Object>{
+      'name': _name.text.trim(),
+      'price': double.parse(_price.text.trim()),
+    };
+    try {
+      final document = widget.document;
+      if (document == null) {
+        await widget.products.add(data);
+      } else {
+        await widget.products.doc(document.id).update(data);
+      }
+      if (!mounted) return;
+      Navigator.of(context).pop();
+    } on FirebaseException catch (error) {
+      debugPrint('Product save failed (${error.code}): ${error.message}');
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _saveError = 'Save failed (${error.code}). '
+            'Check your connection and permissions.';
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+    return PopScope(
+      canPop: !_saving,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20,
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(widget.document == null ? 'Create product' : 'Edit product'),
+                TextFormField(
+                  controller: _name,
+                  enabled: !_saving,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? 'Enter a product name' : null,
+                ),
+                TextFormField(
+                  controller: _price,
+                  enabled: !_saving,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(labelText: 'Price'),
+                  validator: (value) {
+                    final amount = double.tryParse(value?.trim() ?? '');
+                    return amount == null || !amount.isFinite || amount < 0
+                        ? 'Enter a finite price of zero or more' : null;
+                  },
+                ),
+                if (_saveError != null)
+                  Text(_saveError!, style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  )),
+                if (_saving)
+                  const Text(
+                    'Awaiting server acknowledgement. If offline, reconnect. '
+                    'This editor stays open until the write succeeds or fails.',
+                  ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _saving ? null : _save,
+                  child: Text(_saving ? 'Saving...' : 'Save'),
+                ),
+                TextButton(
+                  onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
